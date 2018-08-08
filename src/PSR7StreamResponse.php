@@ -55,6 +55,14 @@ class PSR7StreamResponse extends Response
     }
 
     /**
+     * @return StreamInterface
+     */
+    public function getStream()
+    {
+        return $this->stream;
+    }
+
+    /**
      * Sets the Content-Disposition header with the given filename.
      *
      * @param string $disposition ResponseHeaderBag::DISPOSITION_INLINE or ResponseHeaderBag::DISPOSITION_ATTACHMENT
