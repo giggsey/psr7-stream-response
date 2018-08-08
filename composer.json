@@ -1,0 +1,22 @@
+{
+  "name": "giggsey/psr7-stream-response",
+  "description": "Build a File Response from a PSR-7 Stream",
+  "type": "library",
+  "license": "MIT",
+  "authors": [
+    {
+      "name": "Joshua Gigg",
+      "email": "giggsey@gmail.com"
+    }
+  ],
+  "minimum-stability": "stable",
+  "require": {
+    "symfony/http-foundation": "^2.8|^3.0|^4.1",
+    "psr/http-message": "^1.0"
+  },
+  "autoload": {
+    "psr-4": {
+      "giggsey\\PSR7StreamResponse\\": "src/"
+    }
+  }
+}
