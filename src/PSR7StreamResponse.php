@@ -81,7 +81,7 @@ class PSR7StreamResponse extends Response
     /**
      * {@inheritdoc}
      */
-    public function prepare(Request $request)
+    public function prepare(Request $request): static
     {
         $this->headers->set('Content-Length', $this->stream->getSize());
 
@@ -158,7 +158,7 @@ class PSR7StreamResponse extends Response
      *
      * {@inheritdoc}
      */
-    public function sendContent()
+    public function sendContent(): static
     {
         if (!$this->isSuccessful()) {
             return parent::sendContent();
@@ -185,11 +185,13 @@ class PSR7StreamResponse extends Response
      *
      * @throws \LogicException when the content is not null
      */
-    public function setContent($content)
+    public function setContent($content): static
     {
         if (null !== $content) {
             throw new \LogicException('The content cannot be set on a PSR7StreamResponse instance.');
         }
+
+        return $this;
     }
 
     /**
@@ -197,7 +199,7 @@ class PSR7StreamResponse extends Response
      *
      * @return false
      */
-    public function getContent()
+    public function getContent(): string|false
     {
         return false;
     }
