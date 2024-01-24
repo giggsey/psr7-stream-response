@@ -21,7 +21,7 @@ return $response;
 ### After
 
 ```php
-$response = new PSR7StreamResponse($stream);
+$response = new PSR7StreamResponse($stream, 'audio/mpeg');
 $response = $response->setContentDisposition(ResponseHeaderBag::DISPOSITION_ATTACHMENT, 'my-file.mp3');
 
 return $response;
