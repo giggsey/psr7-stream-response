@@ -1,6 +1,6 @@
 {
   "name": "giggsey/psr7-stream-response",
-  "description": "Build a File Response from a PSR-7 Stream",
+  "description": "Build a Symfony Response from a PSR-7 Stream",
   "type": "library",
   "license": "MIT",
   "authors": [
@@ -11,13 +11,22 @@
   ],
   "minimum-stability": "stable",
   "require": {
-    "php": ">=8.0",
-    "symfony/http-foundation": "^7.0",
-    "psr/http-message": "^1.0|^2.0"
+    "php": ">=8.2",
+    "psr/http-message": "^1.1 || ^2.0",
+    "symfony/http-foundation": "^6.4 || ^7.0 || ^8.0"
+  },
+  "require-dev": {
+    "phpunit/phpunit": "^11.0",
+    "guzzlehttp/psr7": "^2.6"
   },
   "autoload": {
     "psr-4": {
       "giggsey\\PSR7StreamResponse\\": "src/"
+    }
+  },
+  "autoload-dev": {
+    "psr-4": {
+      "giggsey\\PSR7StreamResponse\\Tests\\": "tests/"
     }
   }
 }

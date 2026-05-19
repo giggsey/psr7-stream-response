@@ -1,0 +1,53 @@
+name: Tests
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Keep running other jobs even if one matrix combination fails
+      fail-fast: false
+      matrix:
+        # Since Symfony 8 requires PHP 8.2+, we start testing from 8.2
+        php: ['8.2', '8.3', '8.4']
+        symfony: ['6.4.*', '7.*', '8.*']
+
+    name: PHP ${{ matrix.php }} - Symfony ${{ matrix.symfony }}
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup PHP
+        uses: shivammathur/setup-php@v2
+        with:
+          php-version: ${{ matrix.php }}
+          coverage: none
+          tools: composer:v2
+
+      - name: Get Composer Cache Directory
+        id: composer-cache
+        run: echo "dir=$(composer config cache-files-dir)" >> $GITHUB_OUTPUT
+
+      - name: Cache dependencies
+        uses: actions/cache@v4
+        with:
+          path: ${{ steps.composer-cache.outputs.dir }}
+          key: ${{ runner.os }}-composer-${{ matrix.php }}-${{ matrix.symfony }}-${{ hashFiles('**/composer.json') }}
+          restore-keys: |
+            ${{ runner.os }}-composer-${{ matrix.php }}-${{ matrix.symfony }}-
+
+      - name: Constrain Symfony version
+        run: composer require symfony/http-foundation:"${{ matrix.symfony }}" --no-update --no-interaction
+
+      - name: Install dependencies
+        run: composer update --prefer-dist --no-progress --no-interaction
+
+      - name: Run PHPUnit
+        run: vendor/bin/phpunit
