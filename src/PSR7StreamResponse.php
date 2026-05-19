@@ -4,7 +4,9 @@ namespace giggsey\PSR7StreamResponse;
 
 use LogicException;
 use Psr\Http\Message\StreamInterface;
+use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
+use Symfony\Component\HttpFoundation\ResponseHeaderBag;
 
 class PSR7StreamResponse extends Response
 {
@@ -12,25 +14,93 @@ class PSR7StreamResponse extends Response
     protected int $offset = 0;
     protected int $maxlen = -1;
 
-    public function __construct(StreamInterface $stream, int $status = 200, array $headers = [])
+    public function __construct(StreamInterface $stream, int $status = 200, array $headers = [], bool $public = true)
     {
         parent::__construct(null, $status, $headers);
         $this->stream = $stream;
 
-        // Automatically set Content-Length if the stream knows its size
+        if ($public) {
+            $this->setPublic();
+        }
+
+        if (!$this->headers->has('Accept-Ranges')) {
+            $this->headers->set('Accept-Ranges', 'bytes');
+        }
+
         $size = $stream->getSize();
         if ($size !== null && !$this->headers->has('Content-Length')) {
             $this->headers->set('Content-Length', (string) $size);
         }
+    }
 
-        // Indicate to the client that we accept Range requests
-        if (!$this->headers->has('Accept-Ranges')) {
-            $this->headers->set('Accept-Ranges', 'bytes');
-        }
+    public function getStream(): StreamInterface
+    {
+        return $this->stream;
     }
 
     /**
-     * Symfony 8 requires a static return type.
+     * @return static
+     */
+    public function setStream(StreamInterface $stream): static
+    {
+        $this->stream = $stream;
+        return $this;
+    }
+
+    /**
+     * @return static
+     */
+    public function setContentDisposition(string $disposition, string $filename = '', string $filenameFallback = ''): static
+    {
+        if ($filename === '') {
+            $filename = $filenameFallback;
+        }
+
+        $dispositionHeader = $this->headers->makeDisposition($disposition, $filename, $filenameFallback);
+        $this->headers->set('Content-Disposition', $dispositionHeader);
+
+        return $this;
+    }
+
+    /**
+     * Parses Range requests and sets the offset/maxlen before sending.
+     * * @return static
+     */
+    public function prepare(Request $request): static
+    {
+        if (!$this->headers->has('Content-Type')) {
+            $this->headers->set('Content-Type', 'application/octet-stream');
+        }
+
+        $size = $this->stream->getSize();
+        $this->offset = 0;
+        $this->maxlen = -1;
+
+        if ($size !== null && $this->isSuccessful() && $request->headers->has('Range') && $this->stream->isSeekable()) {
+            $range = $request->headers->get('Range');
+
+            if (preg_match('/^bytes=(\d+)-(\d*)$/', $range, $matches)) {
+                $start = (int) $matches[1];
+                $end = $matches[2] !== '' ? (int) $matches[2] : $size - 1;
+
+                if ($start <= $end && $start < $size) {
+                    $this->setStatusCode(206); // Partial Content
+                    $this->headers->set('Content-Range', sprintf('bytes %d-%d/%d', $start, $end, $size));
+                    $this->headers->set('Content-Length', (string) ($end - $start + 1));
+                    $this->offset = $start;
+                    $this->maxlen = $end - $start + 1;
+                } else {
+                    $this->setStatusCode(416); // Range Not Satisfiable
+                    $this->headers->set('Content-Range', sprintf('bytes */%d', $size));
+                }
+            }
+        }
+
+        return parent::prepare($request);
+    }
+
+    /**
+     * @return static
      */
     public function setContent(mixed $content): static
     {
@@ -41,16 +111,13 @@ class PSR7StreamResponse extends Response
         return $this;
     }
 
-    /**
-     * Symfony 8 requires string|false return type.
-     */
     public function getContent(): string|false
     {
         return false;
     }
 
     /**
-     * Symfony 8 requires a static return type.
+     * @return static
      */
     public function sendContent(): static
     {
@@ -85,22 +152,6 @@ class PSR7StreamResponse extends Response
 
         $this->stream->close();
 
-        return $this;
-    }
-
-    /**
-     * Example fluent method for Range Handling (custom to your library).
-     * Make sure all your fluent setters return `static` to remain compliant.
-     */
-    public function setOffset(int $offset): static
-    {
-        $this->offset = $offset;
-        return $this;
-    }
-
-    public function setMaxlen(int $maxlen): static
-    {
-        $this->maxlen = $maxlen;
         return $this;
     }
 }
