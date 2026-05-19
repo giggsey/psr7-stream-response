@@ -1,10 +1,4 @@
 <?php
-/**
- *
- * User: giggsey
- * Date: 08/08/18
- * Time: 13:21
- */
 
 namespace giggsey\PSR7StreamResponse;
 
@@ -14,39 +8,34 @@ use Symfony\Component\HttpFoundation\Response;
 
 class PSR7StreamResponse extends Response
 {
-    /**
-     * @var StreamInterface
-     */
-    protected $stream;
-    protected $mimeType;
-    protected $offset;
-    protected $maxlen;
+    protected StreamInterface $stream;
+    protected int $offset = 0;
+    protected int $maxlen = -1;
+    protected string $mimeType;
 
     public function __construct(
         StreamInterface $stream,
-        $mimeType,
-        $status = 200,
-        $headers = array(),
-        $public = true
+        string $mimeType,
+        int $status = 200,
+        array $headers = [],
+        bool $public = true
     ) {
         parent::__construct(null, $status, $headers);
 
+        $this->content = '';
+
         $this->setStream($stream, $mimeType);
+
+        if (!$this->headers->has('Content-Type') && '' !== $mimeType) {
+            $this->headers->set('Content-Type', $mimeType);
+        }
 
         if ($public) {
             $this->setPublic();
         }
     }
 
-    /**
-     * Sets the file to stream.
-     *
-     * @param StreamInterface $stream
-     * @param string $mimeType
-     *
-     * @return $this
-     */
-    public function setStream(StreamInterface $stream, $mimeType)
+    public function setStream(StreamInterface $stream, $mimeType): static
     {
         $this->stream = $stream;
         $this->mimeType = $mimeType;
@@ -54,10 +43,7 @@ class PSR7StreamResponse extends Response
         return $this;
     }
 
-    /**
-     * @return StreamInterface
-     */
-    public function getStream()
+    public function getStream(): StreamInterface
     {
         return $this->stream;
     }
@@ -70,7 +56,7 @@ class PSR7StreamResponse extends Response
      *
      * @return $this
      */
-    public function setContentDisposition($disposition, $filename)
+    public function setContentDisposition(string $disposition, string $filename): static
     {
         $dispositionHeader = $this->headers->makeDisposition($disposition, $filename);
         $this->headers->set('Content-Disposition', $dispositionHeader);
@@ -87,7 +73,7 @@ class PSR7StreamResponse extends Response
 
         if (!$this->headers->has('Accept-Ranges')) {
             // Only accept ranges on safe HTTP methods
-            $this->headers->set('Accept-Ranges', $request->isMethodSafe(false) ? 'bytes' : 'none');
+            $this->headers->set('Accept-Ranges', $request->isMethodSafe() ? 'bytes' : 'none');
         }
 
         if (!$this->headers->has('Content-Type')) {
@@ -140,7 +126,7 @@ class PSR7StreamResponse extends Response
     }
 
 
-    private function hasValidIfRangeHeader($header)
+    private function hasValidIfRangeHeader($header): bool
     {
         if ($this->getEtag() === $header) {
             return true;
