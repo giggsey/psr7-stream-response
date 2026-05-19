@@ -2,7 +2,6 @@
 
 namespace giggsey\PSR7StreamResponse;
 
-use LogicException;
 use Psr\Http\Message\StreamInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
@@ -27,7 +26,7 @@ class PSR7StreamResponse extends Response
 
         $this->setStream($stream, $mimeType);
 
-        if (!$this->headers->has('Content-Type')) {
+        if (!$this->headers->has('Content-Type') && '' !== $mimeType) {
             $this->headers->set('Content-Type', $mimeType);
         }
 
