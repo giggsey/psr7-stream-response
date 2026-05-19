@@ -14,9 +14,14 @@ jobs:
       # Keep running other jobs even if one matrix combination fails
       fail-fast: false
       matrix:
-        # Since Symfony 8 requires PHP 8.2+, we start testing from 8.2
         php: ['8.2', '8.3', '8.4']
         symfony: ['6.4.*', '7.*', '8.*']
+        exclude:
+          # Symfony 8 requires PHP 8.4+, so we exclude it from 8.2 and 8.3 runners
+          - php: '8.2'
+            symfony: '8.*'
+          - php: '8.3'
+            symfony: '8.*'
 
     name: PHP ${{ matrix.php }} - Symfony ${{ matrix.symfony }}
 
