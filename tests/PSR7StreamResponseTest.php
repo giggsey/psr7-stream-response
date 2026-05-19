@@ -2,7 +2,7 @@
 
 namespace giggsey\PSR7StreamResponse\Tests;
 
-use Giggsey\PSR7StreamResponse\PSR7StreamResponse;
+use giggsey\PSR7StreamResponse\PSR7StreamResponse;
 use GuzzleHttp\Psr7\Utils;
 use LogicException;
 use PHPUnit\Framework\TestCase;
