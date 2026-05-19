@@ -6,31 +6,42 @@ use LogicException;
 use Psr\Http\Message\StreamInterface;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
-use Symfony\Component\HttpFoundation\ResponseHeaderBag;
 
 class PSR7StreamResponse extends Response
 {
     protected StreamInterface $stream;
     protected int $offset = 0;
     protected int $maxlen = -1;
+    protected string $mimeType;
 
-    public function __construct(StreamInterface $stream, int $status = 200, array $headers = [], bool $public = true)
-    {
+    public function __construct(
+        StreamInterface $stream,
+        string $mimeType,
+        int $status = 200,
+        array $headers = [],
+        bool $public = true
+    ) {
         parent::__construct(null, $status, $headers);
-        $this->stream = $stream;
+
+        $this->content = '';
+
+        $this->setStream($stream, $mimeType);
+
+        if (!$this->headers->has('Content-Type')) {
+            $this->headers->set('Content-Type', $mimeType);
+        }
 
         if ($public) {
             $this->setPublic();
         }
+    }
 
-        if (!$this->headers->has('Accept-Ranges')) {
-            $this->headers->set('Accept-Ranges', 'bytes');
-        }
+    public function setStream(StreamInterface $stream, $mimeType): static
+    {
+        $this->stream = $stream;
+        $this->mimeType = $mimeType;
 
-        $size = $stream->getSize();
-        if ($size !== null && !$this->headers->has('Content-Length')) {
-            $this->headers->set('Content-Length', (string) $size);
-        }
+        return $this;
     }
 
     public function getStream(): StreamInterface
@@ -39,119 +50,144 @@ class PSR7StreamResponse extends Response
     }
 
     /**
-     * @return static
+     * Sets the Content-Disposition header with the given filename.
+     *
+     * @param string $disposition ResponseHeaderBag::DISPOSITION_INLINE or ResponseHeaderBag::DISPOSITION_ATTACHMENT
+     * @param string $filename Use this UTF-8 encoded filename instead of the real name of the file
+     *
+     * @return $this
      */
-    public function setStream(StreamInterface $stream): static
+    public function setContentDisposition(string $disposition, string $filename): static
     {
-        $this->stream = $stream;
-        return $this;
-    }
-
-    /**
-     * @return static
-     */
-    public function setContentDisposition(string $disposition, string $filename = '', string $filenameFallback = ''): static
-    {
-        if ($filename === '') {
-            $filename = $filenameFallback;
-        }
-
-        $dispositionHeader = $this->headers->makeDisposition($disposition, $filename, $filenameFallback);
+        $dispositionHeader = $this->headers->makeDisposition($disposition, $filename);
         $this->headers->set('Content-Disposition', $dispositionHeader);
 
         return $this;
     }
 
     /**
-     * Parses Range requests and sets the offset/maxlen before sending.
-     * * @return static
+     * {@inheritdoc}
      */
     public function prepare(Request $request): static
     {
-        if (!$this->headers->has('Content-Type')) {
-            $this->headers->set('Content-Type', 'application/octet-stream');
+        $this->headers->set('Content-Length', $this->stream->getSize());
+
+        if (!$this->headers->has('Accept-Ranges')) {
+            // Only accept ranges on safe HTTP methods
+            $this->headers->set('Accept-Ranges', $request->isMethodSafe() ? 'bytes' : 'none');
         }
 
-        $size = $this->stream->getSize();
+        if (!$this->headers->has('Content-Type')) {
+            $this->headers->set('Content-Type', $this->mimeType ?: 'application/octet-stream');
+        }
+
+        if ('HTTP/1.0' !== $request->server->get('SERVER_PROTOCOL')) {
+            $this->setProtocolVersion('1.1');
+        }
+
+        $this->ensureIEOverSSLCompatibility($request);
+
         $this->offset = 0;
         $this->maxlen = -1;
 
-        if ($size !== null && $this->isSuccessful() && $request->headers->has('Range') && $this->stream->isSeekable()) {
-            $range = $request->headers->get('Range');
+        if ($request->headers->has('Range')) {
+            // Process the range headers.
+            if (!$request->headers->has('If-Range') || $this->hasValidIfRangeHeader($request->headers->get('If-Range'))) {
+                $range = $request->headers->get('Range');
+                $fileSize = $this->stream->getSize();
 
-            if (preg_match('/^bytes=(\d+)-(\d*)$/', $range, $matches)) {
-                $start = (int) $matches[1];
-                $end = $matches[2] !== '' ? (int) $matches[2] : $size - 1;
+                list($start, $end) = explode('-', substr($range, 6), 2) + array(0);
 
-                if ($start <= $end && $start < $size) {
-                    $this->setStatusCode(206); // Partial Content
-                    $this->headers->set('Content-Range', sprintf('bytes %d-%d/%d', $start, $end, $size));
-                    $this->headers->set('Content-Length', (string) ($end - $start + 1));
-                    $this->offset = $start;
-                    $this->maxlen = $end - $start + 1;
+                $end = ('' === $end) ? $fileSize - 1 : (int)$end;
+
+                if ('' === $start) {
+                    $start = $fileSize - $end;
+                    $end = $fileSize - 1;
                 } else {
-                    $this->setStatusCode(416); // Range Not Satisfiable
-                    $this->headers->set('Content-Range', sprintf('bytes */%d', $size));
+                    $start = (int)$start;
+                }
+
+                if ($start <= $end) {
+                    if ($start < 0 || $end > $fileSize - 1) {
+                        $this->setStatusCode(416);
+                        $this->headers->set('Content-Range', sprintf('bytes */%s', $fileSize));
+                    } elseif (0 !== $start || $end !== $fileSize - 1) {
+                        $this->maxlen = $end < $fileSize ? $end - $start + 1 : -1;
+                        $this->offset = $start;
+
+                        $this->setStatusCode(206);
+                        $this->headers->set('Content-Range', sprintf('bytes %s-%s/%s', $start, $end, $fileSize));
+                        $this->headers->set('Content-Length', $end - $start + 1);
+                    }
                 }
             }
-        }
-
-        return parent::prepare($request);
-    }
-
-    /**
-     * @return static
-     */
-    public function setContent(mixed $content): static
-    {
-        if (null !== $content) {
-            throw new LogicException('Content cannot be set directly on a PSR7StreamResponse instance.');
         }
 
         return $this;
     }
 
-    public function getContent(): string|false
+
+    private function hasValidIfRangeHeader($header): bool
     {
-        return false;
+        if ($this->getEtag() === $header) {
+            return true;
+        }
+
+        if (null === $lastModified = $this->getLastModified()) {
+            return false;
+        }
+
+        return $lastModified->format('D, d M Y H:i:s') . ' GMT' === $header;
     }
 
     /**
-     * @return static
+     * Sends the file.
+     *
+     * {@inheritdoc}
      */
     public function sendContent(): static
     {
-        if (!$this->isSuccessful() && !$this->isRedirection()) {
+        if (!$this->isSuccessful()) {
             return parent::sendContent();
         }
 
-        if ($this->stream->isSeekable()) {
-            $this->stream->seek($this->offset);
+        if (0 === $this->maxlen) {
+            return $this;
         }
 
-        $length = $this->maxlen;
+        $this->stream->seek($this->offset);
 
-        while (!$this->stream->eof()) {
-            $readSize = $length !== -1 ? min(8192, $length) : 8192;
-            $chunk = $this->stream->read($readSize);
-
-            if ($chunk === '') {
-                break;
-            }
-
-            echo $chunk;
-            flush();
-
-            if ($length !== -1) {
-                $length -= strlen($chunk);
-                if ($length <= 0) {
-                    break;
-                }
-            }
+        if ($this->maxlen === -1) {
+            // Read the entire stream
+            $this->maxlen = $this->stream->getSize() - $this->offset;
         }
 
-        $this->stream->close();
+        echo $this->stream->read($this->maxlen);
 
         return $this;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @throws \LogicException when the content is not null
+     */
+    public function setContent($content): static
+    {
+        if (null !== $content) {
+            throw new \LogicException('The content cannot be set on a PSR7StreamResponse instance.');
+        }
+
+        return $this;
+    }
+
+    /**
+     * {@inheritdoc}
+     *
+     * @return false
+     */
+    public function getContent(): string|false
+    {
+        return false;
     }
 }

@@ -33,7 +33,7 @@ jobs:
         uses: shivammathur/setup-php@v2
         with:
           php-version: ${{ matrix.php }}
-          coverage: none
+          coverage: pcov
           tools: composer:v2
 
       - name: Get Composer Cache Directory
@@ -54,5 +54,8 @@ jobs:
       - name: Install dependencies
         run: composer update --prefer-dist --no-progress --no-interaction
 
-      - name: Run PHPUnit
-        run: vendor/bin/phpunit
+      - name: Run Pest
+        run: vendor/bin/pest
+
+      - name: Run Mutation Testing
+        run: vendor/bin/pest --mutate --min=70

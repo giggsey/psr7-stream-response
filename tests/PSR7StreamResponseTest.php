@@ -1,159 +1,294 @@
 <?php
 
-namespace giggsey\PSR7StreamResponse\Tests;
-
 use giggsey\PSR7StreamResponse\PSR7StreamResponse;
 use GuzzleHttp\Psr7\Utils;
-use LogicException;
-use PHPUnit\Framework\TestCase;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\ResponseHeaderBag;
 
-class PSR7StreamResponseTest extends TestCase
-{
-    public function testStreamsEntireContentCorrectly(): void
-    {
-        $string = 'Hello, Symfony 8!';
-        $stream = Utils::streamFor($string);
+covers(PSR7StreamResponse::class);
 
-        $response = new PSR7StreamResponse($stream);
+test('constructor initializes correctly', function () {
+    $stream = Utils::streamFor('test data');
+    $response = new PSR7StreamResponse($stream, 'application/pdf', 201, ['X-Custom' => 'Value']);
 
-        ob_start();
-        $response->sendContent();
-        $output = ob_get_clean();
+    expect($response->getStatusCode())->toBe(201)
+        ->and($response->headers->get('Content-Type'))->toBe('application/pdf')
+        ->and($response->headers->get('X-Custom'))->toBe('Value')
+        ->and($response->getStream())->toBe($stream);
+});
 
-        $this->assertSame($string, $output);
-    }
+test('constructor handles public cache control', function () {
+    $stream = Utils::streamFor('test');
 
-    public function testSetsContentLengthAndAcceptRangesHeadersAutomatically(): void
-    {
-        $string = '12345';
-        $stream = Utils::streamFor($string);
+    // Default is true
+    $responsePublic = new PSR7StreamResponse($stream, 'text/plain');
+    expect($responsePublic->headers->hasCacheControlDirective('public'))->toBeTrue();
 
-        $response = new PSR7StreamResponse($stream);
+    // Explicitly false
+    $responsePrivate = new PSR7StreamResponse($stream, 'text/plain', 200, [], false);
+    expect($responsePrivate->headers->hasCacheControlDirective('public'))->toBeFalse();
+});
 
-        $this->assertTrue($response->headers->has('Content-Length'));
-        $this->assertSame('5', $response->headers->get('Content-Length'));
-        $this->assertSame('bytes', $response->headers->get('Accept-Ranges'));
-    }
+test('get and set stream', function () {
+    $stream1 = Utils::streamFor('stream 1');
+    $stream2 = Utils::streamFor('stream 2');
 
-    public function testHandlesPublicCacheControlCorrectly(): void
-    {
-        $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream1, 'text/plain');
+    expect($response->getStream())->toBe($stream1);
 
-        // Default is true
-        $responsePublic = new PSR7StreamResponse($stream);
-        $this->assertTrue($responsePublic->headers->hasCacheControlDirective('public'));
+    $return = $response->setStream($stream2, 'application/octet-stream');
+    expect($response->getStream())->toBe($stream2)
+        ->and($return)->toBe($response);
+});
 
-        // Explicitly false
-        $responsePrivate = new PSR7StreamResponse($stream, 200, [], false);
-        $this->assertFalse($responsePrivate->headers->hasCacheControlDirective('public'));
-    }
+test('set content disposition', function () {
+    $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream, 'application/pdf');
 
-    public function testGetAndSetStream(): void
-    {
-        $stream1 = Utils::streamFor('stream 1');
-        $stream2 = Utils::streamFor('stream 2');
+    $return = $response->setContentDisposition(ResponseHeaderBag::DISPOSITION_ATTACHMENT, 'download.pdf');
 
-        $response = new PSR7StreamResponse($stream1);
-        $this->assertSame($stream1, $response->getStream());
+    expect($return)->toBe($response);
+    $disposition = $response->headers->get('Content-Disposition');
+    expect($disposition)->toContain('attachment')
+        ->and($disposition)->toContain('filename=download.pdf');
+});
 
-        $response->setStream($stream2);
-        $this->assertSame($stream2, $response->getStream());
-    }
+test('prepare sets standard headers', function () {
+    $content = '0123456789';
+    $stream = Utils::streamFor($content);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
 
-    public function testSetContentDisposition(): void
-    {
-        $stream = Utils::streamFor('test');
-        $response = new PSR7StreamResponse($stream);
+    $request = Request::create('/', 'GET');
+    $response->prepare($request);
 
-        $response->setContentDisposition(ResponseHeaderBag::DISPOSITION_ATTACHMENT, 'download.pdf');
+    expect($response->headers->get('Content-Length'))->toBe('10')
+        ->and($response->headers->get('Content-Type'))->toBe('text/plain')
+        ->and($response->headers->get('Accept-Ranges'))->toBe('bytes')
+        ->and($response->getProtocolVersion())->toBe('1.1');
+});
 
-        $disposition = $response->headers->get('Content-Disposition');
+test('prepare does not override existing content type', function () {
+    $stream = Utils::streamFor('data');
+    $response = new PSR7StreamResponse($stream, 'application/pdf', 200, ['Content-Type' => 'text/plain']);
 
-        $this->assertStringContainsString('attachment', $disposition);
-        // Removed the double quotes around the filename to match Symfony's native output
-        $this->assertStringContainsString('filename=download.pdf', $disposition);
-    }
+    $response->prepare(Request::create('/'));
 
-    public function testPrepareWithValidRangeRequest(): void
-    {
-        $string = '0123456789';
-        $stream = Utils::streamFor($string);
-        $response = new PSR7StreamResponse($stream);
+    expect($response->headers->get('Content-Type'))->toBe('text/plain');
+});
 
-        $request = Request::create('/', 'GET');
-        $request->headers->set('Range', 'bytes=2-6');
+test('prepare sets accept ranges none for unsafe method', function () {
+    $stream = Utils::streamFor('data');
+    $response = new PSR7StreamResponse($stream, 'application/octet-stream');
 
-        $response->prepare($request);
+    $request = Request::create('/', 'POST');
+    $response->prepare($request);
 
-        // Assert Headers & Status
-        $this->assertSame(206, $response->getStatusCode());
-        $this->assertSame('5', $response->headers->get('Content-Length'));
-        $this->assertSame('bytes 2-6/10', $response->headers->get('Content-Range'));
+    expect($response->headers->get('Accept-Ranges'))->toBe('none');
+});
 
-        // Assert Stream Output
-        ob_start();
-        $response->sendContent();
-        $output = ob_get_clean();
+test('prepare with valid range request', function () {
+    $string = '0123456789';
+    $stream = Utils::streamFor($string);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
 
-        // Should read bytes at index 2, 3, 4, 5, 6
-        $this->assertSame('23456', $output);
-    }
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=2-6');
 
-    public function testPrepareWithOpenEndedRangeRequest(): void
-    {
-        $string = '0123456789';
-        $stream = Utils::streamFor($string);
-        $response = new PSR7StreamResponse($stream);
+    $response->prepare($request);
 
-        $request = Request::create('/', 'GET');
-        $request->headers->set('Range', 'bytes=7-'); // Read from index 7 to the end
+    expect($response->getStatusCode())->toBe(206)
+        ->and($response->headers->get('Content-Length'))->toBe('5')
+        ->and($response->headers->get('Content-Range'))->toBe('bytes 2-6/10');
 
-        $response->prepare($request);
+    ob_start();
+    $response->sendContent();
+    $output = ob_get_clean();
 
-        $this->assertSame(206, $response->getStatusCode());
-        $this->assertSame('3', $response->headers->get('Content-Length'));
-        $this->assertSame('bytes 7-9/10', $response->headers->get('Content-Range'));
+    expect($output)->toBe('23456');
+});
 
-        ob_start();
-        $response->sendContent();
-        $output = ob_get_clean();
+test('prepare with open ended range request', function () {
+    $string = '0123456789';
+    $stream = Utils::streamFor($string);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
 
-        $this->assertSame('789', $output);
-    }
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=7-');
 
-    public function testPrepareWithUnsatisfiableRangeRequest(): void
-    {
-        $string = '0123456789';
-        $stream = Utils::streamFor($string);
-        $response = new PSR7StreamResponse($stream);
+    $response->prepare($request);
 
-        $request = Request::create('/', 'GET');
-        $request->headers->set('Range', 'bytes=15-20'); // Out of bounds
+    expect($response->getStatusCode())->toBe(206)
+        ->and($response->headers->get('Content-Length'))->toBe('3')
+        ->and($response->headers->get('Content-Range'))->toBe('bytes 7-9/10');
 
-        $response->prepare($request);
+    ob_start();
+    $response->sendContent();
+    $output = ob_get_clean();
 
-        $this->assertSame(416, $response->getStatusCode());
-        $this->assertSame('bytes */10', $response->headers->get('Content-Range'));
-    }
+    expect($output)->toBe('789');
+});
 
-    public function testThrowsExceptionWhenSettingContentDirectly(): void
-    {
-        $stream = Utils::streamFor('test');
-        $response = new PSR7StreamResponse($stream);
+test('prepare with unsatisfiable range request', function () {
+    $string = '0123456789';
+    $stream = Utils::streamFor($string);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
 
-        $this->expectException(LogicException::class);
-        $this->expectExceptionMessage('Content cannot be set directly on a PSR7StreamResponse instance.');
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=15-20');
 
-        $response->setContent('trying to break it');
-    }
+    $response->prepare($request);
 
-    public function testGetContentReturnsFalse(): void
-    {
-        $stream = Utils::streamFor('test');
-        $response = new PSR7StreamResponse($stream);
+    expect($response->getStatusCode())->toBe(416)
+        ->and($response->headers->get('Content-Range'))->toBe('bytes */10');
+});
 
-        $this->assertFalse($response->getContent());
-    }
-}
+test('prepare if range matching etag honours range', function () {
+    $stream = Utils::streamFor('0123456789');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+    $response->setEtag('foo');
+
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=2-5');
+    $request->headers->set('If-Range', '"foo"');
+
+    $response->prepare($request);
+
+    expect($response->getStatusCode())->toBe(206);
+});
+
+test('prepare if range non matching etag ignores range', function () {
+    $stream = Utils::streamFor('0123456789');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+    $response->setEtag('foo');
+
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=2-5');
+    $request->headers->set('If-Range', 'bar');
+
+    $response->prepare($request);
+
+    expect($response->getStatusCode())->toBe(200);
+});
+
+test('send content outputs full stream', function () {
+    $string = 'Hello, World!';
+    $stream = Utils::streamFor($string);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+
+    ob_start();
+    $return = $response->sendContent();
+    $output = ob_get_clean();
+
+    expect($output)->toBe($string)
+        ->and($return)->toBe($response);
+});
+
+test('set content throws when content is not null', function () {
+    $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+
+    $response->setContent('trying to break it');
+})->throws(LogicException::class, 'The content cannot be set on a PSR7StreamResponse instance.');
+
+test('set content with null is allowed', function () {
+    $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+
+    $return = $response->setContent(null);
+    expect($return)->toBe($response);
+});
+
+test('get content returns false', function () {
+    $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+
+    expect($response->getContent())->toBeFalse();
+});
+
+test('prepare with suffix range request', function () {
+    $string = '0123456789';
+    $stream = Utils::streamFor($string);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=-3');
+
+    $response->prepare($request);
+
+    expect($response->getStatusCode())->toBe(206)
+        ->and($response->headers->get('Content-Length'))->toBe('3')
+        ->and($response->headers->get('Content-Range'))->toBe('bytes 7-9/10');
+
+    ob_start();
+    $response->sendContent();
+    $output = ob_get_clean();
+
+    expect($output)->toBe('789');
+});
+
+test('prepare if range matching last modified honours range', function () {
+    $stream = Utils::streamFor('0123456789');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+    $date = new \DateTime('yesterday');
+    $response->setLastModified($date);
+
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=2-5');
+    $request->headers->set('If-Range', $date->format('D, d M Y H:i:s') . ' GMT');
+
+    $response->prepare($request);
+
+    expect($response->getStatusCode())->toBe(206);
+});
+
+test('send content with unsuccessful response', function () {
+    $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream, 'text/plain', 404);
+
+    ob_start();
+    $response->sendContent();
+    $output = ob_get_clean();
+
+    expect($output)->toBe('');
+});
+
+test('send content with zero max len', function () {
+    $stream = Utils::streamFor('');
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+    $response->prepare(Request::create('/'));
+
+    ob_start();
+    $response->sendContent();
+    $output = ob_get_clean();
+    expect($output)->toBe('');
+});
+
+test('prepare sets fallback content type', function () {
+    $stream = Utils::streamFor('test');
+    $response = new PSR7StreamResponse($stream, '');
+
+    $response->headers->remove('Content-Type');
+
+    $request = Request::create('/');
+    $response->prepare($request);
+
+    expect($response->headers->get('Content-Type'))->toBe('application/octet-stream');
+});
+
+test('send content outputs partial stream when offset is set', function () {
+    $string = '0123456789';
+    $stream = Utils::streamFor($string);
+    $response = new PSR7StreamResponse($stream, 'text/plain');
+
+    // Manually setting offset to check the mutation in sendContent
+    // We can't set offset directly, but we can use a range request to set it
+    $request = Request::create('/', 'GET');
+    $request->headers->set('Range', 'bytes=3-');
+    $response->prepare($request);
+
+    ob_start();
+    $response->sendContent();
+    $output = ob_get_clean();
+
+    expect($output)->toBe('3456789');
+});
